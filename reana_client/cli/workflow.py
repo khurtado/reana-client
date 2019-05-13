@@ -16,20 +16,19 @@ import traceback
 import click
 import tablib
 from jsonschema.exceptions import ValidationError
-from reana_commons.errors import MissingAPIClientConfiguration
-from reana_commons.utils import click_table_printer
 
-from reana_client.api.client import (create_workflow, current_rs_api_client,
+from reana_client.api.client import (close_interactive_session,
+                                     create_workflow, current_rs_api_client,
                                      delete_workflow, diff_workflows,
+                                     get_workflow_disk_usage,
                                      get_workflow_logs,
                                      get_workflow_parameters,
-                                     get_workflow_disk_usage,
                                      get_workflow_status, get_workflows,
                                      open_interactive_session, start_workflow,
                                      stop_workflow)
 from reana_client.cli.files import upload_files
 from reana_client.cli.utils import (add_access_token_options, filter_data,
-                                    parse_parameters)
+                                    format_session_uri, parse_parameters)
 from reana_client.config import ERROR_MESSAGES, reana_yaml_default_file_path
 from reana_client.utils import (get_workflow_name_and_run_number,
                                 get_workflow_status_change_msg, is_uuid_v4,
@@ -38,19 +37,33 @@ from reana_client.utils import (get_workflow_name_and_run_number,
                                 validate_input_parameters,
                                 validate_serial_operational_options,
                                 workflow_uuid_or_name)
+from reana_commons.config import INTERACTIVE_SESSION_TYPES
+from reana_commons.errors import MissingAPIClientConfiguration
+from reana_commons.utils import click_table_printer
 
 
-@click.group(
-    help='All interaction related to workflows on REANA cloud.')
+@click.group(help='Workflow management commands')
 @click.pass_context
-def workflow(ctx):
-    """Top level wrapper for workflow related interaction."""
+def workflow_management_group(ctx):
+    """Top level wrapper for workflow management."""
     logging.debug(ctx.info_name)
 
 
-@click.command(
-    'workflows',
+@click.group(help='Workflow execution commands')
+@click.pass_context
+def workflow_execution_group(ctx):
+    """Top level wrapper for execution related interaction."""
+    logging.debug(ctx.info_name)
+
+
+@workflow_management_group.command(
+    'list',
     help='List all available workflows.')
+@click.option(
+    '-s',
+    '--sessions',
+    is_flag=True,
+    help='List all open interactive sessions.')
 @click.option(
     '--format',
     '_filter',
@@ -78,13 +91,13 @@ def workflow(ctx):
     help='Set status information verbosity.')
 @add_access_token_options
 @click.pass_context
-def workflow_workflows(ctx, _filter, output_format, access_token,
+def workflow_workflows(ctx, sessions, _filter, output_format, access_token,
                        show_all, verbose):
     """List all workflows user has."""
     logging.debug('command: {}'.format(ctx.command_path.replace(" ", ".")))
     for p in ctx.params:
         logging.debug('{param}: {value}'.format(param=p, value=ctx.params[p]))
-
+    type = 'interactive' if sessions else 'batch'
     try:
         _url = current_rs_api_client.swagger_spec.api_url
     except MissingAPIClientConfiguration as e:
@@ -101,23 +114,29 @@ def workflow_workflows(ctx, _filter, output_format, access_token,
     if _filter:
         parsed_filters = parse_parameters(_filter)
     try:
-        response = get_workflows(access_token, bool(verbose))
+        response = get_workflows(access_token, type, bool(verbose))
         verbose_headers = ['id', 'user', 'size']
-        headers = ['name', 'run_number', 'created', 'status']
+        headers = {
+            'batch': ['name', 'run_number', 'created', 'status'],
+            'interactive': ['name', 'run_number', 'created', 'session_type',
+                            'session_uri']
+        }
         if verbose:
-            headers += verbose_headers
+            headers[type] += verbose_headers
         data = []
         for workflow in response:
             if workflow['status'] == 'deleted' and not show_all:
                 continue
             name, run_number = get_workflow_name_and_run_number(
                 workflow['name'])
-            data.append(list(map(str, [name,
-                                       run_number,
-                                       workflow['created'],
-                                       workflow['status']])))
-            if verbose:
-                data[-1] += [workflow[k] for k in verbose_headers]
+            workflow['name'] = name
+            workflow['run_number'] = run_number
+            if type == 'interactive':
+                workflow['session_uri'] = format_session_uri(
+                    reana_server_url=ctx.obj.reana_server_url,
+                    path=workflow['session_uri'],
+                    access_token=access_token)
+            data.append([str(workflow[k]) for k in headers[type]])
         data = sorted(data, key=lambda x: int(x[1]))
         workflow_ids = ['{0}.{1}'.format(w[0], w[1]) for w in data]
         if os.getenv('REANA_WORKON', '') in workflow_ids:
@@ -125,15 +144,15 @@ def workflow_workflows(ctx, _filter, output_format, access_token,
                 workflow_ids.index(os.getenv('REANA_WORKON', ''))
             for idx, row in enumerate(data):
                 if idx == active_workflow_idx:
-                    data[idx][headers.index('run_number')] += ' *'
+                    data[idx][headers[type].index('run_number')] += ' *'
         tablib_data = tablib.Dataset()
-        tablib_data.headers = headers
+        tablib_data.headers = headers[type]
         for row in data:
             tablib_data.append(row=row, tags=row)
 
         if _filter:
             tablib_data, filtered_headers = \
-                filter_data(parsed_filters, headers, tablib_data)
+                filter_data(parsed_filters, headers[type], tablib_data)
             if output_format:
                 click.echo(json.dumps(tablib_data))
             else:
@@ -144,7 +163,7 @@ def workflow_workflows(ctx, _filter, output_format, access_token,
             if output_format:
                 click.echo(tablib_data.export(output_format))
             else:
-                click_table_printer(headers, _filter, data)
+                click_table_printer(headers[type], _filter, data)
 
     except Exception as e:
         logging.debug(traceback.format_exc())
@@ -155,7 +174,7 @@ def workflow_workflows(ctx, _filter, output_format, access_token,
             err=True)
 
 
-@click.command(
+@workflow_management_group.command(
     'create',
     help='Create a REANA compatible workflow from REANA '
          'specifications file.')
@@ -219,7 +238,7 @@ def workflow_create(ctx, file, name, skip_validation, access_token):
             sys.exit(1)
 
 
-@click.command(
+@workflow_execution_group.command(
     'start',
     help="""
     Start previously created workflow.
@@ -312,7 +331,7 @@ def workflow_start(ctx, workflow, access_token,
                 sys.exit(1)
 
 
-@click.command(
+@workflow_execution_group.command(
     'status',
     help='Get status of a previously created workflow.')
 @click.option(
@@ -447,57 +466,7 @@ def workflow_status(ctx, workflow, _filter, output_format,
                 err=True)
 
 
-@click.command(
-    'du',
-    help='Get disk usage of a workflow.')
-@click.option(
-    '-w',
-    '--workflow',
-    default=os.environ.get('REANA_WORKON', None),
-    callback=workflow_uuid_or_name,
-    help='Name or UUID of the workflow to display the disk usage. '
-         'Overrides value of REANA_WORKON environment variable.')
-@add_access_token_options
-@click.option(
-    '-s',
-    '--summarize',
-    count=True,
-    help='Display total.')
-@click.pass_context
-def workflow_disk_usage(ctx, workflow, access_token, summarize):
-    """Get disk usage of a workflow."""
-    logging.debug('command: {}'.format(ctx.command_path.replace(" ", ".")))
-    for p in ctx.params:
-        logging.debug('{param}: {value}'.format(param=p, value=ctx.params[p]))
-
-    if not access_token:
-        click.echo(
-            click.style(ERROR_MESSAGES['missing_access_token'],
-                        fg='red'), err=True)
-        sys.exit(1)
-
-    if workflow:
-        try:
-            parameters = {'summarize': summarize}
-            response = get_workflow_disk_usage(workflow,
-                                               parameters,
-                                               access_token)
-            headers = ['size', 'name']
-            data = []
-            for disk_usage_info in response['disk_usage_info']:
-                data.append([disk_usage_info['size'],
-                             '.{}'.format(disk_usage_info['name'])])
-            click_table_printer(headers, [], data)
-        except Exception as e:
-            logging.debug(traceback.format_exc())
-            logging.debug(str(e))
-            click.echo(
-                click.style('Disk usage could not be retrieved: \n{}'
-                            .format(str(e)), fg='red'),
-                err=True)
-
-
-@click.command(
+@workflow_execution_group.command(
     'logs',
     help='Get workflow logs.')
 @click.option(
@@ -563,7 +532,7 @@ def workflow_logs(ctx, workflow, access_token, json_format):
                 err=True)
 
 
-@click.command(
+@workflow_execution_group.command(
     'validate',
     help='Validate the REANA specification.')
 @click.option(
@@ -602,7 +571,7 @@ def workflow_validate(ctx, file):
             err=True)
 
 
-@click.command(
+@workflow_execution_group.command(
     'stop',
     help='Stop a running workflow')
 @click.option(
@@ -648,7 +617,7 @@ def workflow_stop(ctx, workflow, force_stop, access_token):
                         fg='red', err=True)
 
 
-@click.command(
+@workflow_execution_group.command(
     'run',
     help='Create, upload and start the REANA workflow.')
 @click.option(
@@ -713,7 +682,7 @@ def workflow_run(ctx, file, filenames, name, skip_validation,
                options=options)
 
 
-@click.command(
+@workflow_management_group.command(
     'delete',
     help='Delete a workflow run. By default removes all cached'
          ' information of the given workflow and hides it from'
@@ -790,7 +759,7 @@ def workflow_delete(ctx, workflow, all_runs, workspace,
                 err=True)
 
 
-@click.command(
+@workflow_management_group.command(
     'diff',
     help='Show differences between two workflows.')
 @click.argument(
@@ -863,28 +832,35 @@ def workflow_diff(ctx, workflow_a, workflow_b, brief,
             err=True)
 
 
-@click.command(
+@click.group(help='Workspace interactive commands')
+def interactive_group():
+    """Workspace interactive commands."""
+    pass
+
+
+@interactive_group.command(
     'open',
     help='Open an interactive session inside the workflow workspace')
-@click.argument(
-    'workflow',
+@click.option(
+    '-w',
+    '--workflow',
     default=os.environ.get('REANA_WORKON', None),
-    callback=workflow_uuid_or_name)
+    callback=workflow_uuid_or_name,
+    help='Name and run number to be deleted. '
+         'Overrides value of REANA_WORKON environment variable.')
+@click.argument(
+    'interactive-session-type',
+    metavar='interactive-session-type',
+    type=click.Choice(INTERACTIVE_SESSION_TYPES))
 @click.option(
     '-i',
     '--image',
-    help="Image to use in the interactive session, by default it is "
-         "``jupyter/scipy-notebook``.")
-@click.option(
-    '-p',
-    '--port',
-    type=int,
-    help="Specify a port for the interactive session, by default ``8888`` "
-         "for Jupyter notebooks.")
+    help='Docker image which will be used to spawn the interactive session. '
+         'Overrides the default image for the selected type.')
 @add_access_token_options
 @click.pass_context
-def workflow_open_interactive_session(ctx, workflow, access_token, image,
-                                      port):
+def workflow_open_interactive_session(ctx, workflow, interactive_session_type,
+                                      image, access_token):
     """Open an interactive session inside the workflow workspace."""
     if not access_token:
         click.secho(
@@ -894,9 +870,13 @@ def workflow_open_interactive_session(ctx, workflow, access_token, image,
         try:
             logging.info(
                 "Opening an interactive session on {}".format(workflow))
-            path = open_interactive_session(workflow, access_token, image,
-                                            port)
-            click.secho("{reana_server_url}{path}?token={access_token}".format(
+            interactive_session_configuration = {
+                "image": image or None,
+            }
+            path = open_interactive_session(workflow, access_token,
+                                            interactive_session_type,
+                                            interactive_session_configuration)
+            click.secho(format_session_uri(
                 reana_server_url=ctx.obj.reana_server_url,
                 path=path, access_token=access_token), fg="green")
             click.echo("It could take several minutes to start the "
@@ -911,15 +891,35 @@ def workflow_open_interactive_session(ctx, workflow, access_token, image,
                     fg="red", err=True)
 
 
-workflow.add_command(workflow_workflows)
-workflow.add_command(workflow_create)
-workflow.add_command(workflow_start)
-workflow.add_command(workflow_validate)
-workflow.add_command(workflow_status)
-workflow.add_command(workflow_stop)
-workflow.add_command(workflow_run)
-workflow.add_command(workflow_delete)
-workflow.add_command(workflow_diff)
-workflow.add_command(workflow_logs)
-workflow.add_command(workflow_open_interactive_session)
-workflow.add_command(workflow_disk_usage)
+@interactive_group.command(
+    'close',
+    help='Close an interactive workflow session')
+@click.option(
+    '-w',
+    '--workflow',
+    default=os.environ.get('REANA_WORKON', None),
+    callback=workflow_uuid_or_name,
+    help='Name and run number to be deleted. '
+         'Overrides value of REANA_WORKON environment variable.')
+@add_access_token_options
+def workflow_close_interactive_session(workflow, access_token):
+    """Close an interactive workflow session."""
+    if not access_token:
+        click.secho(
+            ERROR_MESSAGES['missing_access_token'], fg='red', err=True)
+        sys.exit(1)
+    if workflow:
+        try:
+            logging.info(
+                "Closing an interactive session on {}".format(workflow))
+            close_interactive_session(workflow, access_token)
+            click.echo("Interactive session for workflow {}"
+                       " was successfully closed".format(workflow))
+        except Exception as e:
+            logging.debug(traceback.format_exc())
+            logging.debug(str(e))
+            click.secho("Interactive session could not be closed: \n{}"
+                        .format(str(e)), fg='red', err=True)
+    else:
+            click.secho("Workflow {} does not exist".format(workflow),
+                        fg="red", err=True)
