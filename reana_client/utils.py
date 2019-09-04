@@ -18,7 +18,7 @@ from uuid import UUID
 import click
 import yadageschemas
 import yaml
-from cwltool.main import main
+from cwltool.main import main as cwltool_main
 from jsonschema import ValidationError, validate
 from reana_commons.serial import serial_load
 from reana_commons.utils import get_workflow_status_change_verb
@@ -44,11 +44,29 @@ def yadage_load(workflow_file, toplevel='.'):
 
     :param workflow_file: A specification file compliant with
         `yadage` workflow specification.
+    :type workflow_file: string
+    :param toplevel: URL/path for the workflow file
+    :type toplevel: string
+
     :returns: A dictionary which represents the valid `yadage` workflow.
     """
-    return yadageschemas.load(workflow_file, toplevel=toplevel,
-                              schema_name='yadage/workflow-schema',
-                              schemadir=None, validate=True)
+    schema_name = 'yadage/workflow-schema'
+    schemadir = None
+
+    specopts = {
+        'toplevel': toplevel,
+        'schema_name': schema_name,
+        'schemadir': schemadir,
+        'load_as_ref': False,
+    }
+
+    validopts = {
+        'schema_name': schema_name,
+        'schemadir': schemadir,
+    }
+
+    return yadageschemas.load(spec=workflow_file, specopts=specopts,
+                              validopts=validopts, validate=True)
 
 
 def cwl_load(workflow_file):
@@ -59,7 +77,9 @@ def cwl_load(workflow_file):
     :returns: A dictionary which represents the valid `cwl` workflow.
     """
     mystdout = StringIO()
-    main(["--pack", "--quiet", workflow_file], stdout=mystdout)
+    mystderr = StringIO()
+    cwltool_main(argsl=["--pack", "--quiet", workflow_file],
+                 stdout=mystdout, stderr=mystderr)
     value = mystdout.getvalue()
     return json.loads(value)
 
@@ -94,7 +114,7 @@ def load_reana_spec(filepath, skip_validation=False):
         with open(filepath) as f:
             reana_yaml = yaml.load(f.read(), Loader=yaml.FullLoader)
 
-        if not (skip_validation):
+        if not skip_validation:
             logging.info('Validating REANA specification file: {filepath}'
                          .format(filepath=filepath))
             _validate_reana_yaml(reana_yaml)
@@ -106,16 +126,19 @@ def load_reana_spec(filepath, skip_validation=False):
             kwargs['parameters'] = \
                 reana_yaml.get('inputs', {}).get('parameters', {})
             kwargs['original'] = True
+
         reana_yaml['workflow']['specification'] = load_workflow_spec(
             reana_yaml['workflow']['type'],
             reana_yaml['workflow'].get('file'),
             **kwargs
         )
+
         if reana_yaml['workflow']['type'] == 'cwl' and \
                 'inputs' in reana_yaml:
             with open(reana_yaml['inputs']['parameters']['input']) as f:
                 reana_yaml['inputs']['parameters'] = \
                     yaml.load(f, Loader=yaml.FullLoader)
+
         return reana_yaml
     except IOError as e:
         logging.info(
