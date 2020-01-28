@@ -25,7 +25,8 @@ from reana_client.utils import get_workflow_status_change_msg
 def test_workflows_server_not_connected():
     """Test workflows command when server is not connected."""
     runner = CliRunner()
-    result = runner.invoke(cli, ['list'])
+    reana_token = '000000'
+    result = runner.invoke(cli, ['list', '-t', reana_token])
     message = 'REANA client is not connected to any REANA cluster.'
     assert message in result.output
     assert result.exit_code == 1
@@ -186,7 +187,8 @@ def test_workflows_filter():
 
 def test_workflow_create_failed():
     """Test workflow create when creation fails."""
-    runner = CliRunner()
+    env = {'REANA_SERVER_URL': 'localhost'}
+    runner = CliRunner(env=env)
     result = runner.invoke(cli, ['create'])
     message = 'Error: Invalid value for "-f"'
     assert message in result.output
@@ -343,7 +345,8 @@ def test_workflow_start_follow(initial_status, final_status, exit_code):
 def test_workflows_validate(create_yaml_workflow_schema):
     """Test validation of REANA specifications file."""
     message = "is a valid REANA specification file"
-    runner = CliRunner()
+    env = {'REANA_SERVER_URL': 'localhost'}
+    runner = CliRunner(env=env)
     with runner.isolated_filesystem():
         with open('reana.yaml', 'w') as f:
             f.write(create_yaml_workflow_schema)
@@ -407,13 +410,15 @@ def test_run(workflow_start_mock,
              create_yaml_workflow_schema):
     """Test run command, if wrapped commands are called."""
     reana_workflow_schema = "reana.yaml"
-    runner = CliRunner()
+    env = {'REANA_SERVER_URL': 'localhost'}
+    runner = CliRunner(env=env)
+    reana_token = '000000'
     with runner.isolated_filesystem():
         with open(reana_workflow_schema, 'w') as f:
             f.write(create_yaml_workflow_schema)
         result = runner.invoke(
             cli,
-            ['run', '-f', reana_workflow_schema],
+            ['run', '-t', reana_token, '-f', reana_workflow_schema],
         )
     assert workflow_create_mock.called is True
     assert upload_file_mock.called is True

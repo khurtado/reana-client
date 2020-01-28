@@ -19,7 +19,7 @@ readme = open('README.rst').read()
 history = open('CHANGES.rst').read()
 
 tests_require = [
-    'pytest-reana>=0.6.0.dev20190705,<0.7.0',
+    'pytest-reana>=0.6.0,<0.7.0',
 ]
 
 extras_require = {
@@ -42,14 +42,14 @@ setup_requires = [
 ]
 
 install_requires = [
+    'PyYAML>=5.1',
     'typing>=3.7.4 ; python_version=="2.7"',  # workaround for CWL deps
     'click>=7',
     'cryptography>=2.7',
-    'cwltool==1.0.20190815141648',
+    'cwltool==1.0.20191022103248',
     'pyOpenSSL>=19.0.0',  # FIXME remove once yadage-schemas solves deps.
     'jsonpointer>=2.0',
-    'jsonschema>=3.0.1',
-    'reana-commons>=0.6.0.dev20190604,<0.7.0',
+    'reana-commons>=0.6.0,<0.7.0',
     'rfc3987>=1.3.8',  # FIXME remove once yadage-schemas solves deps.
     'six==1.12.0',
     'strict-rfc3339>=0.7',  # FIXME remove once yadage-schemas solves deps.
@@ -101,6 +101,7 @@ setup(
         'Programming Language :: Python :: 3',
         'Programming Language :: Python :: 3.6',
         'Programming Language :: Python :: 3.7',
+        'Programming Language :: Python :: 3.8',
         'Programming Language :: Python :: Implementation :: CPython',
         'Programming Language :: Python',
         'Topic :: Internet :: WWW/HTTP :: Dynamic Content',

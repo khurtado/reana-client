@@ -13,10 +13,11 @@ import traceback
 import click
 from reana_client.api.client import add_secrets, delete_secrets, \
     list_secrets, current_rs_api_client
-from reana_client.cli.utils import add_access_token_options, NotRequiredIf
+from reana_client.cli.utils import (add_access_token_options, check_connection,
+                                    NotRequiredIf)
 from reana_client.config import ERROR_MESSAGES
-from reana_commons.errors import MissingAPIClientConfiguration, \
-    REANASecretAlreadyExists, REANASecretDoesNotExist
+from reana_commons.errors import (REANASecretAlreadyExists,
+                                  REANASecretDoesNotExist)
 
 from reana_commons.utils import click_table_printer
 
@@ -53,6 +54,7 @@ def secrets_group(ctx):
     default=False,
     help='Overwrite the secret if already present')
 @add_access_token_options
+@check_connection
 def secrets_add(env, file, overwrite, access_token):  # noqa: D301
     """Add secrets from literal string or from file.
 
@@ -63,12 +65,6 @@ def secrets_add(env, file, overwrite, access_token):  # noqa: D301
     \t                            --env PASSWORD=password \n
     \t                            --file ~/.keytab
     """
-    if not access_token:
-        click.echo(
-            click.style(ERROR_MESSAGES['missing_access_token'], fg='red'),
-            err=True)
-        sys.exit(1)
-
     secrets_ = {}
     for literal in env:
         secret = parse_secret_from_literal(literal)
@@ -104,6 +100,7 @@ def secrets_add(env, file, overwrite, access_token):  # noqa: D301
 
 @secrets_group.command()
 @add_access_token_options
+@check_connection
 @click.argument('secrets', type=str, nargs=-1)
 def secrets_delete(secrets, access_token):  # noqa: D301
     """Delete user secrets by name.
@@ -111,12 +108,6 @@ def secrets_delete(secrets, access_token):  # noqa: D301
      Examples: \n
     \t $ reana-client secrets-delete PASSWORD
     """
-    if not access_token:
-        click.echo(
-            click.style(ERROR_MESSAGES['missing_access_token'], fg='red'),
-            err=True)
-        sys.exit(1)
-
     try:
         deleted_secrets = delete_secrets(secrets, access_token)
     except REANASecretDoesNotExist as e:
@@ -144,27 +135,13 @@ def secrets_delete(secrets, access_token):  # noqa: D301
 
 @secrets_group.command()
 @add_access_token_options
+@check_connection
 def secrets_list(access_token):  # noqa: D301
     """List user secrets.
 
     Examples: \n
     \t $ reana-client secrets-list
     """
-    try:
-        _url = current_rs_api_client.swagger_spec.api_url
-    except MissingAPIClientConfiguration as e:
-        click.secho(
-            'REANA client is not connected to any REANA cluster.',
-            fg='red', err=True
-        )
-        sys.exit(1)
-
-    if not access_token:
-        click.echo(
-            click.style(ERROR_MESSAGES['missing_access_token'], fg='red'),
-            err=True)
-        sys.exit(1)
-
     try:
         secrets = list_secrets(access_token)
         headers = ['name', 'type']

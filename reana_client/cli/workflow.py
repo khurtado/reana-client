@@ -28,8 +28,9 @@ from reana_client.api.client import (close_interactive_session,
                                      stop_workflow)
 from reana_client.cli.files import get_files, upload_files
 from reana_client.cli.utils import (add_access_token_options,
-                                    add_workflow_option, filter_data,
-                                    format_session_uri, parse_parameters)
+                                    add_workflow_option, check_connection,
+                                    filter_data, format_session_uri,
+                                    parse_parameters)
 from reana_client.config import (ERROR_MESSAGES, TIMECHECK,
                                  reana_yaml_default_file_path)
 from reana_client.utils import (get_workflow_name_and_run_number,
@@ -40,7 +41,6 @@ from reana_client.utils import (get_workflow_name_and_run_number,
                                 validate_serial_operational_options,
                                 workflow_uuid_or_name)
 from reana_commons.config import INTERACTIVE_SESSION_TYPES
-from reana_commons.errors import MissingAPIClientConfiguration
 from reana_commons.utils import click_table_printer
 
 
@@ -90,6 +90,7 @@ def workflow_execution_group(ctx):
     count=True,
     help='Set status information verbosity.')
 @add_access_token_options
+@check_connection
 @click.pass_context
 def workflow_workflows(ctx, sessions, _filter, output_format, access_token,
                        show_all, verbose):  # noqa: D301
@@ -108,19 +109,6 @@ def workflow_workflows(ctx, sessions, _filter, output_format, access_token,
     for p in ctx.params:
         logging.debug('{param}: {value}'.format(param=p, value=ctx.params[p]))
     type = 'interactive' if sessions else 'batch'
-    try:
-        _url = current_rs_api_client.swagger_spec.api_url
-    except MissingAPIClientConfiguration as e:
-        click.secho(
-            'REANA client is not connected to any REANA cluster.',
-            fg='red', err=True
-        )
-        sys.exit(1)
-    if not access_token:
-        click.echo(
-            click.style(ERROR_MESSAGES['missing_access_token'],
-                        fg='red'), err=True)
-        sys.exit(1)
     if _filter:
         parsed_filters = parse_parameters(_filter)
     try:
@@ -203,6 +191,7 @@ def workflow_workflows(ctx, sessions, _filter, output_format, access_token,
     help="If set, specifications file is not validated before "
          "submitting it's contents to REANA server.")
 @add_access_token_options
+@check_connection
 @click.pass_context
 def workflow_create(ctx, file, name,
                     skip_validation, access_token):  # noqa: D301
@@ -229,11 +218,6 @@ def workflow_create(ctx, file, name,
         click.echo(
             click.style('Workflow name cannot be a valid UUIDv4', fg='red'),
             err=True)
-    if not access_token:
-        click.echo(
-            click.style(ERROR_MESSAGES['missing_access_token'],
-                        fg='red'), err=True)
-        sys.exit(1)
     try:
         reana_specification = load_reana_spec(click.format_filename(file),
                                               skip_validation)
@@ -260,6 +244,7 @@ def workflow_create(ctx, file, name,
 @workflow_execution_group.command('start')
 @add_workflow_option
 @add_access_token_options
+@check_connection
 @click.option(
     '-p', '--parameter', 'parameters',
     multiple=True,
@@ -300,11 +285,6 @@ def workflow_start(ctx, workflow, access_token,
     for p in ctx.params:
         logging.debug('{param}: {value}'.format(param=p, value=ctx.params[p]))
 
-    if not access_token:
-        click.echo(
-            click.style(ERROR_MESSAGES['missing_access_token'],
-                        fg='red'), err=True)
-        sys.exit(1)
     parsed_parameters = {'input_parameters':
                          dict(p.split('=') for p in parameters)}
     parsed_parameters['operational_options'] = ' '.join(options).split()
@@ -385,6 +365,7 @@ def workflow_start(ctx, workflow, access_token,
     default=None,
     help='Get output in JSON format.')
 @add_access_token_options
+@check_connection
 @click.option(
     '-v',
     '--verbose',
@@ -461,13 +442,6 @@ def workflow_status(ctx, workflow, _filter, output_format,
     logging.debug('command: {}'.format(ctx.command_path.replace(" ", ".")))
     for p in ctx.params:
         logging.debug('{param}: {value}'.format(param=p, value=ctx.params[p]))
-
-    if not access_token:
-        click.echo(
-            click.style(ERROR_MESSAGES['missing_access_token'],
-                        fg='red'), err=True)
-        sys.exit(1)
-
     if workflow:
         try:
             response = get_workflow_status(workflow, access_token)
@@ -515,6 +489,7 @@ def workflow_status(ctx, workflow, _filter, output_format,
     count=True,
     help='Get output in JSON format.')
 @add_access_token_options
+@check_connection
 @click.pass_context
 def workflow_logs(ctx, workflow, access_token, json_format):  # noqa: D301
     """Get  workflow logs.
@@ -626,6 +601,7 @@ def workflow_validate(ctx, file):  # noqa: D301
     help='Stop a workflow without waiting for jobs to finish.')
 @add_workflow_option
 @add_access_token_options
+@check_connection
 @click.pass_context
 def workflow_stop(ctx, workflow, force_stop, access_token):  # noqa: D301
     """Stop a running workflow.
@@ -643,11 +619,6 @@ def workflow_stop(ctx, workflow, force_stop, access_token):  # noqa: D301
                     'stop your workflow without waiting for jobs to finish'
                     ' use: --force option', fg='red')
         raise click.Abort()
-
-    if not access_token:
-        click.secho(
-            ERROR_MESSAGES['missing_access_token'], fg='red', err=True)
-        sys.exit(1)
 
     if workflow:
         try:
@@ -672,11 +643,6 @@ def workflow_stop(ctx, workflow, force_stop, access_token):  # noqa: D301
     default=reana_yaml_default_file_path,
     help='REANA specifications file describing the workflow and '
          'context which REANA should execute.')
-@click.argument(
-    'filenames',
-    metavar='SOURCES',
-    type=click.Path(exists=True, resolve_path=True),
-    nargs=-1)
 @click.option(
     '-n', '--name',
     '-w', '--workflow',
@@ -707,8 +673,9 @@ def workflow_stop(ctx, workflow, force_stop, access_token):  # noqa: D301
     help='If set, follows the execution of the workflow until termination.',
 )
 @add_access_token_options
+@check_connection
 @click.pass_context
-def workflow_run(ctx, file, filenames, name, skip_validation,
+def workflow_run(ctx, file, name, skip_validation,
                  access_token, parameters, options, follow):  # noqa: D301
     """Shortcut to create, upload, start a new workflow.
 
@@ -731,7 +698,7 @@ def workflow_run(ctx, file, filenames, name, skip_validation,
     click.secho('[INFO] Uploading files...', bold=True)
     ctx.invoke(upload_files,
                workflow=ctx.workflow_name,
-               filenames=filenames,
+               filenames=None,
                access_token=access_token)
     click.secho('[INFO] Starting workflow...', bold=True)
     ctx.invoke(workflow_start,
@@ -762,6 +729,7 @@ def workflow_run(ctx, file, filenames, name, skip_validation,
 )
 @add_workflow_option
 @add_access_token_options
+@check_connection
 @click.pass_context
 def workflow_delete(ctx, workflow, all_runs, workspace,
                     hard_delete, access_token):  # noqa: D301
@@ -781,12 +749,6 @@ def workflow_delete(ctx, workflow, all_runs, workspace,
     logging.debug('command: {}'.format(ctx.command_path.replace(" ", ".")))
     for p in ctx.params:
         logging.debug('{param}: {value}'.format(param=p, value=ctx.params[p]))
-
-    if not access_token:
-        click.echo(
-            click.style(ERROR_MESSAGES['missing_access_token'],
-                        fg='red'), err=True)
-        sys.exit(1)
 
     if workflow:
         try:
@@ -837,6 +799,7 @@ def workflow_delete(ctx, workflow, all_runs, workspace,
     default=5,
     help="Sets number of context lines for workspace diff output.")
 @add_access_token_options
+@check_connection
 @click.pass_context
 def workflow_diff(ctx, workflow_a, workflow_b, brief,
                   access_token, context_lines):  # noqa: D301
@@ -912,6 +875,7 @@ def interactive_group():
     help='Docker image which will be used to spawn the interactive session. '
          'Overrides the default image for the selected type.')
 @add_access_token_options
+@check_connection
 @click.pass_context
 def workflow_open_interactive_session(ctx, workflow, interactive_session_type,
                                       image, access_token):  # noqa: D301
@@ -925,10 +889,6 @@ def workflow_open_interactive_session(ctx, workflow, interactive_session_type,
     Examples:\n
     \t $ reana-client open -w myanalysis.42 jupyter
     """
-    if not access_token:
-        click.secho(
-            ERROR_MESSAGES['missing_access_token'], fg='red', err=True)
-        sys.exit(1)
     if workflow:
         try:
             logging.info(
@@ -957,6 +917,7 @@ def workflow_open_interactive_session(ctx, workflow, interactive_session_type,
 @interactive_group.command('close')
 @add_workflow_option
 @add_access_token_options
+@check_connection
 def workflow_close_interactive_session(workflow, access_token):  # noqa: D301
     """Close an interactive session.
 
@@ -968,10 +929,6 @@ def workflow_close_interactive_session(workflow, access_token):  # noqa: D301
     Examples:\n
     \t $ reana-client close -w myanalysis.42
     """
-    if not access_token:
-        click.secho(
-            ERROR_MESSAGES['missing_access_token'], fg='red', err=True)
-        sys.exit(1)
     if workflow:
         try:
             logging.info(

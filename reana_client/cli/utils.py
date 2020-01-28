@@ -15,16 +15,47 @@ import sys
 
 import click
 
+from reana_client.api.client import current_rs_api_client
 from reana_client.utils import workflow_uuid_or_name
+from reana_client.config import ERROR_MESSAGES
+from reana_commons.errors import MissingAPIClientConfiguration
 
 
 def add_access_token_options(func):
     """Add access token related options to click commands."""
     @click.option('-t', '--access-token',
                   default=os.getenv('REANA_ACCESS_TOKEN', None),
+                  callback=access_token_check,
                   help='Access token of the current user.')
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+
+def access_token_check(ctx, _, access_token):
+    """Check if access token is present."""
+    if not access_token:
+        click.echo(
+            click.style(ERROR_MESSAGES['missing_access_token'],
+                        fg='red'), err=True)
+        ctx.exit(1)
+    else:
+        return access_token
+
+
+def check_connection(func):
+    """Check if connected to any REANA cluster."""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            _url = current_rs_api_client.swagger_spec.api_url
+        except MissingAPIClientConfiguration as e:
+            click.secho(
+                'REANA client is not connected to any REANA cluster.',
+                fg='red', err=True
+            )
+            sys.exit(1)
         return func(*args, **kwargs)
     return wrapper
 
